@@ -2,7 +2,6 @@
 
 import numpy as np
 import taichi as ti
-import random
 
 arch = ti.vulkan if ti._lib.core.with_vulkan() else ti.cuda
 ti.init(arch=arch, debug=True)
@@ -22,7 +21,7 @@ class FieldPair:
 # Parametros de la simulacion de fluidos
 res = 512  # Resolución del grid
 h = 1 / res  # Tamaño de la celda
-dt = 0.03  # Tamaño del paso de tiempo 
+dt = 0.03  # Tamaño del paso de tiempo
 
 ## Parametros de la fuente de densidad
 s_dens = 10
@@ -33,7 +32,16 @@ s_radius = res / 15.0
 #Grids
 _density_field_1 = ti.field(float, shape=(res,res)) 
 _density_field_2 = ti.field(float, shape=(res,res)) 
+
 dens = FieldPair(_density_field_1, _density_field_2)
+
+div = ti.field(float, shape=(res,res)) 
+
+_p_field_1 = ti.field(float, shape=(res,res)) 
+_p_field_2 = ti.field(float, shape=(res,res)) 
+
+p = FieldPair(_p_field_1, _p_field_2)
+
 
 #Cabecera con la que taichi toma el control de las tareas 
 @ti.kernel
@@ -51,14 +59,16 @@ def add_sources(dens: ti.template(), input_data: ti.types.ndarray()):
         # Distancia al centro de la casilla (al cuadrado), de mi ratón
         d2 = (cx - mx) ** 2 + (cy - my) ** 2
         # Decaimiento exponencial
-        dens.cur[i, j] += dt * densidad * ti.exp(-6 * d2 / s_radius**2) #+ tiempo más cantidad según la distancia del ratón con la celda
+        dens.cur[i, j] += dt * densidad * ti.exp(-6 * d2 / s_radius**2) #+ tiempo más cantidad según la distancia del raton con la celda
 
-#Una vez por cada iteración, kernel ya paraleliza
+#Una vez por cada iteración de jacobi
 @ti.kernel
 def jacobi_iter(dens_cur: ti.template(), dens_nxt: ti.template(), a:float):
     for i, j in dens_cur:
-        #sin + porque trabajo con el valor de la iteracion anterior para todas las celdas, sino es Gauss-Seidel no Jacobi
-        dens_nxt[i,j] = (dens_cur[i,j] + a*(dens_cur[i-1,j]+dens_cur[i+1,j]+dens_cur[i,j-1]+dens_cur[i,j+1]))/(1+4*a)
+        # Protege de salirse fuera de los límites
+        if 0 < i < res - 1 and 0 < j < res - 1:
+            #sin + porque trabajo con el valor de la iteracion anterior para todas las celdas, sino es Gauss-Seidel no Jacobi
+            dens_nxt[i,j] = (dens_cur[i,j] + a*(dens_cur[i-1,j]+dens_cur[i+1,j]+dens_cur[i,j-1]+dens_cur[i,j+1]))/(1+4*a)
 
 @ti.kernel
 def set_boundaries(dens: ti.template()):
@@ -83,29 +93,133 @@ def set_boundaries(dens: ti.template()):
     dens[res-1, res-1] = (dens[res-1,res-2] + dens[res-2,res-1]) / 2 #Abajo derecha
           
 def diffuse(dens: ti.template(), dt:float, h:float, k:float):
-    #Diffusion rate 
     a = k * dt / h**2 #Solo de una celda
-    #Numero de iteraciones en bucle, random entre 40 y 150
-    for it in range(40): 
+    #Numero de iteraciones en bucle
+    for it in range(30): 
         jacobi_iter(dens.cur,dens.nxt,a)
         #Buffer auxiliar
-        dens.swap() #Necesario porque sino no se está actualizando los grid se está haciendo lo mismo una y otra vez 
+        dens.swap()
         set_boundaries(dens.cur)
 
+## Campos de velocidad
+#Grids
+#Velocidad horizontal
+_vel_u_1 = ti.field(float, shape=(res, res))
+_vel_u_2 = ti.field(float, shape=(res, res))
+vel_u = FieldPair(_vel_u_1, _vel_u_2)
+#Velocidad vertical
+_vel_v_1 = ti.field(float, shape=(res, res))
+_vel_v_2 = ti.field(float, shape=(res, res))
+vel_v = FieldPair(_vel_v_1, _vel_v_2)                
 
-#Inicialización de las matrices que irán evolucionando 
+#Para funciones que se ejecutan dentro de kernels
+@ti.func
+def bilerp(dens_cur:ti.template(), x, y):
+    #Veo posiciones en las esquinas de la casilla que engloba al punto x,y
+    #Trunco
+    i0 = int(ti.floor(x))
+    j0 = int(ti.floor(y))
+    i1 = i0 + 1
+    j1 = j0 + 1
+
+    #Pesos en la interpolación según lo lejos que tengo las esquinas
+    s1 = x - i0
+    s0 = 1 - s1
+    t1 = y - j0
+    t0 = 1 - t1
+
+    #Interpolo
+    return s0*(t0*dens_cur[i0,j0] + t1* dens_cur[i0, j1]) + s1*(t0*dens_cur[i1, j0] + t1*dens_cur[i1, j1])
+
+@ti.kernel
+def advect(dens:ti.template(), dt:float, vel_u:ti.template(), vel_v:ti.template()):
+    for i, j in dens.nxt:
+        #Vectores velocidad
+        u = vel_u.cur[i, j]
+        v = vel_v.cur[i, j]
+        #Centros
+        cx = i + 0.5
+        cy = j + 0.5
+        #Posición backwards en el campo velocidad
+        x = cx - dt * u
+        y = cy - dt * v
+        #Controlo no salir del grid
+        x = ti.math.clamp(x, 0.5, res - 1.5)
+        y = ti.math.clamp(y, 0.5, res - 1.5)
+        #Interpolo
+        dens.nxt[i,j] = bilerp(dens.cur, x, y)
+    set_boundaries(dens.nxt)
+
+@ti.kernel
+def vel_horizontal(vel_u_cur: ti.template()):
+    for i, j in vel_u_cur:
+        if 0 <= j < 150:
+            vel_u.cur[i, j] = j * -0.01
+        elif 150 <= j <= 300:
+            vel_u.cur[i, j] =  j * 0.15
+        elif j > 300:
+            vel_u.cur[i, j] = j * -0.01
+
+@ti.kernel
+def project1(div:ti.template(), p:ti.template(), vel_u:ti.template(), vel_v:ti.template()):
+    for i, j in div:
+        # Protege de salirse fuera de los límites
+        if 0 < i < res - 1 and 0 < j < res - 1:
+            div[i,j] = -0.5*h*(vel_u.cur[i+1,j] - vel_u.cur[i-1,j] + vel_v.cur[i,j+1] - vel_v.cur[i,j-1])
+            p.cur[i,j] = 0
+
+@ti.kernel
+def jacobi_poisson(div: ti.template(), p_cur:ti.template(), p_nxt:ti.template()):
+    for i, j in div:
+        # Protege de salirse fuera de los límites
+        if 0 < i < res - 1 and 0 < j < res - 1:
+            p_nxt[i,j] = (div[i,j] + (p_cur[i-1,j]+p_cur[i+1,j]+p_cur[i,j-1]+p_cur[i,j+1]))/4
+
+@ti.kernel
+def project2(vel_u:ti.template(),vel_v:ti.template(), p:ti.template()):
+    for i, j in vel_u.cur:
+        # Protege de salirse fuera de los límites
+        if 0 < i < res - 1 and 0 < j < res - 1:
+            vel_u.cur[i,j] -= 0.5*(p.cur[i+1,j] -p.cur[i-1,j])/h
+            vel_v.cur[i,j] -= 0.5*(p.cur[i,j+1] -p.cur[i,j-1])/h
+
+#Todo campo de vel = campo de consevación de la masa + campo gradiente.
+def project(div:ti.template(), vel_u:ti.template(), vel_v:ti.template(), p:ti.template(), h:float):
+    project1(div, p, vel_u, vel_v)
+    set_boundaries(div)
+    set_boundaries(p.cur)
+    for it in range(30):
+        jacobi_poisson(div, p.cur,p.nxt)
+        p.swap()
+        set_boundaries(p.cur)
+    project2(vel_u, vel_v, p)
+    set_boundaries(vel_u.cur)
+    set_boundaries(vel_v.cur)
+
+
 def init():
     #Hago 0s en las matrices
     dens.cur.fill(0) 
     dens.nxt.fill(0)
+    vel_u.cur.fill(0) 
+    vel_u.nxt.fill(0)
+    vel_v.cur.fill(0) 
+    vel_v.nxt.fill(0)
+    div.fill(0)
+    p.cur.fill(0)
+    p.nxt.fill(0)
+    vel_horizontal(vel_u.cur)
 
 
 def step(input_data):
     #Se va a ir actualizando en cada frame
     add_sources(dens, input_data)
     set_boundaries(dens.cur)
-    diffuse(dens, dt,h, k = 3.0e-6)
-
+    diffuse(dens, dt,h, k = 3.0e-5)
+    dens.swap()
+    project(div,vel_u, vel_v, p, h)
+    advect(dens,dt,vel_u,vel_v)
+    project(div,vel_u, vel_v, p, h)
 
 def main():
     paused = False
