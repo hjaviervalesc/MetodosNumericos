@@ -182,6 +182,7 @@ def init():
     vel_v.nxt.fill(0)
 
 
+
 def step(input_data):
     #Se va a ir actualizando en cada frame
     add_sources(dens, input_data)
