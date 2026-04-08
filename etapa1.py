@@ -1,14 +1,10 @@
-# Referencia: https://github.com/taichi-dev/taichi/blob/master/python/taichi/examples/ggui_examples/stable_fluid_ggui.py
-
 import numpy as np
 import taichi as ti
-import random
 
 arch = ti.vulkan if ti._lib.core.with_vulkan() else ti.cuda
 ti.init(arch=arch, debug=True)
 print("Backend activo:", ti.cfg.arch) 
 #Backedn activo: Arch.vulkan, vulkan trabaja en GPU
-
 
 class FieldPair:
     def __init__(self, current_field, next_field):
@@ -17,7 +13,6 @@ class FieldPair:
 
     def swap(self):
         self.cur, self.nxt = self.nxt, self.cur
-
 
 # Parametros de la simulacion de fluidos
 res = 512  # Resolución del grid
@@ -30,35 +25,30 @@ s_radius = res / 15.0
 
 # Estructuras de datos
 ## Campos de densidad
-#Grids
+#Grid
 _density_field_1 = ti.field(float, shape=(res,res)) 
 _density_field_2 = ti.field(float, shape=(res,res)) 
+
 dens = FieldPair(_density_field_1, _density_field_2)
 
-#Cabecera con la que taichi toma el control de las tareas 
 @ti.kernel
-                #pilla los grids     #Eventos de ratón
 def add_sources(dens: ti.template(), input_data: ti.types.ndarray()):
-    #Para cada casilla de mis grids
     for i, j in dens.cur:
-        densidad = input_data[2] * s_dens #Actualiza la cantidad de densidad a añadir
-                #eje de mi ratón
+        densidad = input_data[2] * s_dens 
         mx, my = input_data[0], input_data[1]
-        #Las celdas de taichi default son 1x1 
-        # Centro casilla i,j
         cx = i + 0.5
         cy = j + 0.5
-        # Distancia al centro de la casilla (al cuadrado), de mi ratón
         d2 = (cx - mx) ** 2 + (cy - my) ** 2
-        # Decaimiento exponencial
-        dens.cur[i, j] += dt * densidad * ti.exp(-6 * d2 / s_radius**2) #+ tiempo más cantidad según la distancia del ratón con la celda
+        dens.cur[i, j] += dt * densidad * ti.exp(-6 * d2 / s_radius**2)
 
 #Una vez por cada iteración, kernel ya paraleliza
 @ti.kernel
 def jacobi_iter(dens_cur: ti.template(), dens_nxt: ti.template(), a:float):
     for i, j in dens_cur:
-        #sin + porque trabajo con el valor de la iteracion anterior para todas las celdas, sino es Gauss-Seidel no Jacobi
-        dens_nxt[i,j] = (dens_cur[i,j] + a*(dens_cur[i-1,j]+dens_cur[i+1,j]+dens_cur[i,j-1]+dens_cur[i,j+1]))/(1+4*a)
+        #Evita acceso fuera de rangos del grid
+        if 0 < i < res - 1 and 0 < j < res - 1:
+            #sin + porque trabajo con el valor de la iteracion anterior para todas las celdas, sino es Gauss-Seidel no Jacobi
+            dens_nxt[i,j] = (dens_cur[i,j] + a*(dens_cur[i-1,j]+dens_cur[i+1,j]+dens_cur[i,j-1]+dens_cur[i,j+1]))/(1+4*a)
 
 @ti.kernel
 def set_boundaries(dens: ti.template()):
@@ -83,29 +73,23 @@ def set_boundaries(dens: ti.template()):
     dens[res-1, res-1] = (dens[res-1,res-2] + dens[res-2,res-1]) / 2 #Abajo derecha
           
 def diffuse(dens: ti.template(), dt:float, h:float, k:float):
-    #Diffusion rate 
-    a = k * dt / h**2 #Solo de una celda
-    #Numero de iteraciones en bucle, random entre 40 y 150
-    for it in range(40): 
+    #Ratio de difusión, cuanto más grande más se va a difundir la cantidad de densidad.
+    a = k * dt / h**2 
+    #Numero de iteraciones en bucle
+    for it in range(150): 
         jacobi_iter(dens.cur,dens.nxt,a)
         #Buffer auxiliar
         dens.swap() #Necesario porque sino no se está actualizando los grid se está haciendo lo mismo una y otra vez 
         set_boundaries(dens.cur)
 
-
-#Inicialización de las matrices que irán evolucionando 
 def init():
-    #Hago 0s en las matrices
     dens.cur.fill(0) 
     dens.nxt.fill(0)
-
 
 def step(input_data):
     #Se va a ir actualizando en cada frame
     add_sources(dens, input_data)
-    set_boundaries(dens.cur)
-    diffuse(dens, dt,h, k = 3.0e-6)
-
+    diffuse(dens, dt,h, k = 3.0e-5)
 
 def main():
     paused = False
@@ -148,7 +132,6 @@ def main():
         # Donde se va a mostrar el resultado
         canvas.set_image(dens.cur)
         window.show()
-
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,3 @@
-# Referencia: https://github.com/taichi-dev/taichi/blob/master/python/taichi/examples/ggui_examples/stable_fluid_ggui.py
-
 import numpy as np
 import taichi as ti
 
@@ -30,18 +28,16 @@ s_radius = res / 15.0
 _density_field_1 = ti.field(float, shape=(res,res)) #Grid de initial state
 _density_field_2 = ti.field(float, shape=(res,res)) #Grid de add sources
 
-
 dens = FieldPair(_density_field_1, _density_field_2)
 
 #Cabecera con la que taichi toma el control de las tareas paralelas
 @ti.kernel
-                #pilla los grids     #Eventos de ratón
+                #Coge el grid       #Eventos de ratón
 def add_sources(dens: ti.template(), input_data: ti.types.ndarray()):
     #Para cada casilla de mis grids
     for i, j in dens:
         densidad = input_data[2] * s_dens #Actualiza la cantidad de densidad a añadir
-                #eje de mi ratón
-        mx, my = input_data[0], input_data[1]
+        mx, my = input_data[0], input_data[1] #eje de mi ratón
         #Las celdas de taichi default son 1x1 
         # Centro casilla i,j
         cx = i + 0.5

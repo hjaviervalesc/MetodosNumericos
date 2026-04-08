@@ -1,5 +1,3 @@
-# Referencia: https://github.com/taichi-dev/taichi/blob/master/python/taichi/examples/ggui_examples/stable_fluid_ggui.py
-
 import numpy as np
 import taichi as ti
 
@@ -7,6 +5,7 @@ arch = ti.vulkan if ti._lib.core.with_vulkan() else ti.cuda
 ti.init(arch=arch, debug=True)
 print("Backend activo:", ti.cfg.arch) 
 #Backedn activo: Arch.vulkan, vulkan trabaja en GPU
+
 
 class FieldPair:
     def __init__(self, current_field, next_field):
@@ -26,84 +25,74 @@ dt = 0.03  # Tamaño del paso de tiempo
 s_dens = 10
 s_radius = res / 15.0
 
+
+##Parametros de fuente de fuerza
 s_fuerza = 100
 
 # Estructuras de datos
 ## Campos de densidad
-#Grids
+#Grid
 _density_field_1 = ti.field(float, shape=(res,res)) 
 _density_field_2 = ti.field(float, shape=(res,res)) 
-
 dens = FieldPair(_density_field_1, _density_field_2)
+## Campos de velocidad
+#Grid
+#Velocidad horizontal
+_vel_u_1 = ti.field(float, shape=(res, res))
+_vel_u_2 = ti.field(float, shape=(res, res))
+vel_u = FieldPair(_vel_u_1, _vel_u_2)
+#Velocidad vertical
+_vel_v_1 = ti.field(float, shape=(res, res))
+_vel_v_2 = ti.field(float, shape=(res, res))
+vel_v = FieldPair(_vel_v_1, _vel_v_2)  
 
-div = ti.field(float, shape=(res,res)) 
 
-_p_field_1 = ti.field(float, shape=(res,res)) 
-_p_field_2 = ti.field(float, shape=(res,res)) 
-
-p = FieldPair(_p_field_1, _p_field_2)
-
-
-#Cabecera con la que taichi toma el control de las tareas 
 @ti.kernel
-                #pilla los grids     #Eventos de ratón
 def add_sources(dens: ti.template(), input_data: ti.types.ndarray()):
-    #Para cada casilla de mis grids
     for i, j in dens.cur:
-        densidad = input_data[2] * s_dens #Actualiza la cantidad de densidad a añadir
-                #eje de mi ratón
+        densidad = input_data[2] * s_dens 
         mx, my = input_data[0], input_data[1]
-        #Las celdas de taichi default son 1x1 
-        # Centro casilla i,j
         cx = i + 0.5
         cy = j + 0.5
-        # Distancia al centro de la casilla (al cuadrado), de mi ratón
         d2 = (cx - mx) ** 2 + (cy - my) ** 2
-        # Decaimiento exponencial
-        dens.cur[i, j] += dt * densidad * ti.exp(-6 * d2 / s_radius**2) #+ tiempo más cantidad según la distancia del raton con la celda
+        dens.cur[i, j] += dt * densidad * ti.exp(-6 * d2 / s_radius**2)
 
-        #Cabecera con la que taichi toma el control de las tareas 
 @ti.kernel
 def add_forces(vel_u: ti.template(), vel_v: ti.template(), input_data: ti.types.ndarray()):
-    #Para cada casilla de mis grids
     for i, j in vel_u.cur:
-        fuerza = input_data[5] * s_fuerza #Actualiza la cantidad de densidad a añadir
+        fuerza = input_data[5] * s_fuerza 
+        
         mx, my = input_data[3], input_data[4]
         dx, dy = input_data[6], input_data[7]
-        #Las celdas de taichi default son 1x1 
-        # Centro casilla i,j
+
         cx = i + 0.5
         cy = j + 0.5
-        # Distancia al centro de la casilla (al cuadrado), de mi ratón
+
         d2 = (cx - mx) ** 2 + (cy - my) ** 2
+
         vel_u.cur[i,j] += dx * ti.exp(-6 * d2 / s_radius**2) * fuerza
         vel_v.cur[i,j] += dy * ti.exp(-6 * d2 / s_radius**2) * fuerza
-#Una vez por cada iteración de jacobi
+
+#Adaptado tanto para campos de velocidad como de densidad
 @ti.kernel
 def jacobi_iter(field_cur: ti.template(), field_nxt: ti.template(), a:float):
     for i, j in field_cur:
-        # Protege de salirse fuera de los límites
         if 0 < i < res - 1 and 0 < j < res - 1:
-            #sin + porque trabajo con el valor de la iteracion anterior para todas las celdas, sino es Gauss-Seidel no Jacobi
             field_nxt[i,j] = (field_cur[i,j] + a*(field_cur[i-1,j]+field_cur[i+1,j]+field_cur[i,j-1]+field_cur[i,j+1]))/(1+4*a)
+
 
 @ti.kernel
 def set_boundaries(dens: ti.template()):
     for i, j in dens:
-        #La fila de arriba excepto la casilla primera y final
         if i == 0 and 0 < j < res - 1:
             dens[i,j] = dens[i+1,j]
-        #La fila de abajo excepto la casilla primera y final
         elif i == res - 1 and 0 < j < res - 1:
             dens[i, j] = dens[i - 1, j]
-        #La fila del lateral izq excepto la casilla primera y final
         elif j == 0 and 0 < i < res - 1:
             dens[i, j] = dens[i, j + 1]
-        #La fila del lateral derecho excepto la casilla primera y final
         elif j == res - 1 and 0 < i < res - 1:
             dens[i, j] = dens[i, j - 1]
             
-    #Las casillas de las esquina
     dens[0,0] = (dens[0,1] + dens[1,0]) / 2 #Arriba izq
     dens[res-1,0] = (dens[res-1,1] + dens[res-2,0]) / 2 #Abajo izquierda
     dens[0, res-1] =(dens[0,res-2] + dens[1,res-1]) / 2 #Arriba derecha
@@ -113,22 +102,25 @@ def set_boundaries(dens: ti.template()):
 @ti.kernel
 def set_boundaries_reflective(vel_u_cur: ti.template(), vel_v_cur: ti.template()):
     for i, j in vel_u_cur:
-        #La fila de arriba excepto la casilla primera y final
+        # La fila de arriba excepto la casilla primera y final
         if i == 0 and 0 < j < res - 1:
-            vel_u_cur[i,j] = vel_u_cur[i+1,j] #tangencial
-            vel_v_cur[i,j] = -vel_v_cur[i+1,j] #normal
-        #La fila de abajo excepto la casilla primera y final
+            vel_u_cur[i,j] =  vel_u_cur[i+1,j]    # tangencial copiada
+            vel_v_cur[i,j] = -vel_v_cur[i+1,j]    # normal invertida
+
+        # La fila de abajo excepto la casilla primera y final
         elif i == res - 1 and 0 < j < res - 1:
-            vel_u_cur[i, j] = vel_u_cur[i - 1, j] #tangencial
-            vel_v_cur[i, j] = -vel_v_cur[i - 1, j] #normal
-        #La fila del lateral izq excepto la casilla primera y final
+            vel_u_cur[i, j] =  vel_u_cur[i - 1, j]   # tangencial copiada
+            vel_v_cur[i, j] = -vel_v_cur[i - 1, j]   # normal invertida  
+
+        # La fila del lateral izq excepto la casilla primera y final
         elif j == 0 and 0 < i < res - 1:
-            vel_u_cur[i, j] = -vel_u_cur[i, j + 1] #normal
-            vel_v_cur[i, j] = vel_v_cur[i, j + 1] #tangencial
-        #La fila del lateral derecho excepto la casilla primera y final
+            vel_u_cur[i, j] = -vel_u_cur[i, j + 1]   # normal invertida
+            vel_v_cur[i, j] =  vel_v_cur[i, j + 1]   # tangencial copiada    
+
+        # La fila del lateral derecho excepto la casilla primera y final
         elif j == res - 1 and 0 < i < res - 1:
-            vel_u_cur[i, j] = -vel_u_cur[i, j - 1] #normal
-            vel_v_cur[i, j] = vel_v_cur[i, j - 1] #tangencial
+            vel_u_cur[i, j] = -vel_u_cur[i, j - 1]   # normal invertida
+            vel_v_cur[i, j] =  vel_v_cur[i, j - 1]   # tangencial copiada
             
     #Las casillas de las esquina
     vel_u_cur[0,0] = (vel_u_cur[0,1] + vel_u_cur[1,0]) / 2 #Arriba izq
@@ -142,79 +134,63 @@ def set_boundaries_reflective(vel_u_cur: ti.template(), vel_v_cur: ti.template()
 
     vel_u_cur[res-1, res-1] = (vel_u_cur[res-1,res-2] + vel_u_cur[res-2,res-1]) / 2 #Abajo derecha
     vel_v_cur[res-1, res-1] = (vel_v_cur[res-1,res-2] + vel_v_cur[res-2,res-1]) / 2 #Abajo derecha
-          
+
+#Divido diffuse en dos funciones, una para densidad y otra para velocidad, porque la función de set_boundaries es diferente para cada una de ellas.
 def diffuse_dens(dens: ti.template(), dt:float, h:float, k:float):
-    a = k * dt / h**2 #Solo de una celda
-    #Numero de iteraciones en bucle
+    a = k * dt / h**2 
     for it in range(30): 
         jacobi_iter(dens.cur,dens.nxt,a)
-        #Buffer auxiliar
         dens.swap()
         set_boundaries(dens.cur)
 
 def diffuse_vel(vel_u: ti.template(),vel_v: ti.template(), dt:float, h:float, visc:float):
-    a = visc * dt / h**2 #Solo de una celda
-    #Numero de iteraciones en bucle
+    a = visc * dt / h**2 
     for it in range(30): 
         jacobi_iter(vel_u.cur,vel_u.nxt,a)
         vel_u.swap()
         jacobi_iter(vel_v.cur,vel_v.nxt,a)
         vel_v.swap()
         set_boundaries_reflective(vel_u.cur, vel_v.cur)
-
-## Campos de velocidad
-#Grids
-#Velocidad horizontal
-_vel_u_1 = ti.field(float, shape=(res, res))
-_vel_u_2 = ti.field(float, shape=(res, res))
-vel_u = FieldPair(_vel_u_1, _vel_u_2)
-#Velocidad vertical
-_vel_v_1 = ti.field(float, shape=(res, res))
-_vel_v_2 = ti.field(float, shape=(res, res))
-vel_v = FieldPair(_vel_v_1, _vel_v_2)                
-
-#Para funciones que se ejecutan dentro de kernels
+ 
+#Adecuado tanto para campos de velocidad como de densidad
 @ti.func
-def bilerp(dens_cur:ti.template(), x, y):
-    #Veo posiciones en las esquinas de la casilla que engloba al punto x,y
-    #Trunco
+def bilerp(field_cur:ti.template(), x, y):
     i0 = int(ti.floor(x))
     j0 = int(ti.floor(y))
+
     i1 = i0 + 1
     j1 = j0 + 1
 
-    #Pesos en la interpolación según lo lejos que tengo las esquinas
     s1 = x - i0
     s0 = 1 - s1
     t1 = y - j0
     t0 = 1 - t1
 
-    #Interpolo
-    return s0*(t0*dens_cur[i0,j0] + t1* dens_cur[i0, j1]) + s1*(t0*dens_cur[i1, j0] + t1*dens_cur[i1, j1])
+    return s0*(t0*field_cur[i0,j0] + t1* field_cur[i0, j1]) + s1*(t0*field_cur[i1, j0] + t1*field_cur[i1, j1])
 
+#Adecuado tanto para campos de velocidad como de densidad
 @ti.kernel
 def advect(field:ti.template(), dt:float, vel_u:ti.template(), vel_v:ti.template()):
     for i, j in field.nxt:
-        #Vectores velocidad
         u = vel_u.cur[i, j]
         v = vel_v.cur[i, j]
-        #Centros
+
         cx = i + 0.5
         cy = j + 0.5
-        #Posición backwards en el campo velocidad
+
         x = cx - dt * u
         y = cy - dt * v
-        #Controlo no salir del grid
+
         x = ti.math.clamp(x, 0.5, res - 1.5)
         y = ti.math.clamp(y, 0.5, res - 1.5)
-        #Interpolo
+
         field.nxt[i,j] = bilerp(field.cur, x, y)
 
-
+#Divido advect en dos funciones, una para densidad y otra para velocidad, porque la función de set_boundaries es diferente para cada una de ellas.
 def advect_vel(vel_u:ti.template(), vel_v:ti.template(), dt:float):
     advect(vel_u, dt, vel_u, vel_v)
-    vel_u.swap()
     advect(vel_v, dt, vel_u, vel_v)
+    vel_u.swap()
     vel_v.swap()
     set_boundaries_reflective(vel_u.cur, vel_v.cur)
 
@@ -227,47 +203,12 @@ def advect_dens(dens:ti.template(), dt:float, vel_u:ti.template(), vel_v:ti.temp
 def vel_horizontal(vel_u_cur: ti.template()):
     for i, j in vel_u_cur:
         if 0 <= j < 150:
-            vel_u.cur[i, j] = j * -0.01
+            vel_u.cur[i, j] =  -10
         elif 150 <= j <= 300:
-            vel_u.cur[i, j] =  j * 0.15
+            vel_u.cur[i, j] =  30
         elif j > 300:
-            vel_u.cur[i, j] = j * -0.01
+            vel_u.cur[i, j] =  -10
 
-@ti.kernel
-def project1(div:ti.template(), p:ti.template(), vel_u:ti.template(), vel_v:ti.template()):
-    for i, j in div:
-        # Protege de salirse fuera de los límites
-        if 0 < i < res - 1 and 0 < j < res - 1:
-            div[i,j] = -0.5*h*(vel_u.cur[i+1,j] - vel_u.cur[i-1,j] + vel_v.cur[i,j+1] - vel_v.cur[i,j-1])
-            p.cur[i,j] = 0
-
-@ti.kernel
-def jacobi_poisson(div: ti.template(), p_cur:ti.template(), p_nxt:ti.template()):
-    for i, j in div:
-        # Protege de salirse fuera de los límites
-        if 0 < i < res - 1 and 0 < j < res - 1:
-            p_nxt[i,j] = (div[i,j] + (p_cur[i-1,j]+p_cur[i+1,j]+p_cur[i,j-1]+p_cur[i,j+1]))/4
-
-@ti.kernel
-def project2(vel_u:ti.template(),vel_v:ti.template(), p:ti.template()):
-    for i, j in vel_u.cur:
-        # Protege de salirse fuera de los límites
-        if 0 < i < res - 1 and 0 < j < res - 1:
-            vel_u.cur[i,j] -= 0.5*(p.cur[i+1,j] -p.cur[i-1,j])/h
-            vel_v.cur[i,j] -= 0.5*(p.cur[i,j+1] -p.cur[i,j-1])/h
-
-#Todo campo de vel = campo de consevación de la masa + campo gradiente.
-def project(div:ti.template(), vel_u:ti.template(), vel_v:ti.template(), p:ti.template(), h:float):
-    project1(div, p, vel_u, vel_v)
-    set_boundaries(div)
-    set_boundaries(p.cur)
-    for it in range(30):
-        jacobi_poisson(div, p.cur,p.nxt)
-        p.swap()
-        set_boundaries(p.cur)
-    project2(vel_u, vel_v, p)
-    set_boundaries(vel_u.cur)
-    set_boundaries(vel_v.cur)
 
 def init():
     #Hago 0s en las matrices
@@ -277,31 +218,25 @@ def init():
     vel_u.nxt.fill(0)
     vel_v.cur.fill(0) 
     vel_v.nxt.fill(0)
-    div.fill(0)
-    p.cur.fill(0)
-    p.nxt.fill(0)
+
+
+def dens_step(input_data):
+    add_sources(dens, input_data)
+    set_boundaries(dens.cur)
+    diffuse_dens(dens, dt,h, k = 3.0e-5)
+    advect_dens(dens,dt,vel_u,vel_v)
 
 def vel_step(input_data):
     add_forces(vel_u, vel_v, input_data)
-    #La k aquí es viscosidad
-    diffuse_vel(vel_u, vel_v, dt, h, visc=3.0e-8)
-    vel_u.swap()
-    vel_v.swap()
-    project(div,vel_u, vel_v, p, h)
+    set_boundaries_reflective(vel_u.cur, vel_v.cur)
+    diffuse_vel(vel_u,vel_v, dt,h, visc = 3.0e-5)
     advect_vel(vel_u, vel_v, dt)
-    project(div,vel_u, vel_v, p, h)
 
-def dens_step(input_data):
-    #Se va a ir actualizando en cada frame
-    add_sources(dens, input_data)
-    set_boundaries(dens.cur)
-    diffuse_dens(dens,dt,h, k = 3.0e-5)
-    dens.swap()
-    advect_dens(dens,dt,vel_u,vel_v)
 
 def step(input_data):
-    vel_step(input_data)
     dens_step(input_data)
+    vel_step(input_data)
+
 
 def main():
     paused = False
